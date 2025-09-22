@@ -6,13 +6,15 @@
   const groupSizeInput = document.getElementById('group-size');
   const rollBtn = document.getElementById('roll-btn');
   const clearBtn = document.getElementById('clear-btn');
+  const saveBtn = document.getElementById('save-btn');
   const results = document.getElementById('results');
   const hint = document.getElementById('hint');
 
-  const STORAGE_KEY = 'only-lunch:v1';
+  const STORAGE_KEY = 'only-lunch:v2';
   let state = {
     participants: [], // [{ name: string, local: boolean }]
     groupSize: 2,
+    history: [], // array of sessions, each session is array of groups, each group is array of names
   };
 
   function save() {
@@ -31,7 +33,12 @@
         }).filter(p => p.name);
       }
       if (typeof parsed.groupSize === 'number' && parsed.groupSize > 1) state.groupSize = parsed.groupSize;
+      if (Array.isArray(parsed.history)) state.history = parsed.history.filter(isValidSession);
     } catch (_) {}
+  }
+
+  function isValidSession(s) {
+    return Array.isArray(s) && s.every(g => Array.isArray(g) && g.every(n => typeof n === 'string'));
   }
 
   function renderParticipants() {
@@ -152,15 +159,15 @@
     // Shuffle and form groups of equal size as much as possible.
     // If leftover remains, distribute one by one to existing groups to balance sizes.
     const shuffled = shuffle(state.participants);
-    const locals = shuffled.filter(p => p.local);
-    const nonLocals = shuffled.filter(p => !p.local);
+  const locals = shuffled.filter(p => p.local);
+  const nonLocals = shuffled.filter(p => !p.local);
 
     // Determine number of groups: we need at least one local per group
     const desiredGroups = Math.ceil(state.participants.length / state.groupSize);
     const groupsCount = Math.max(1, Math.min(desiredGroups, locals.length || 1));
 
     // Seed groups with one local each (or as many as we can)
-    const groups = Array.from({ length: groupsCount }, () => []);
+  const groups = Array.from({ length: groupsCount }, () => []);
     for (let i = 0; i < groupsCount && locals.length; i++) {
       const person = locals.shift();
       groups[i].push(person);
@@ -173,11 +180,33 @@
       gi++;
     }
 
-    // Distribute non-locals to fill up to groupSize as evenly as possible
-    gi = 0;
+    // Build a penalty map for pairs that have already met
+    const penalty = buildPenaltyMap();
+
+    // Helper to score adding a candidate to a target group
+    function scoreCandidate(group, candidate) {
+      // Base preference: keep groups near target size
+      let score = group.length; // lower is better; fewer members preferred initially
+      // Add penalties for prior pairings
+      for (const member of group) {
+        const pairKey = pair(member.name, candidate.name);
+        score += (penalty.get(pairKey) || 0) * 10; // heavy weight to avoid repeats
+      }
+      // Encourage at least one local per group
+      if (!group.some(p => p.local) && !candidate.local) score += 20;
+      return score;
+    }
+
+    // Greedy assignment of non-locals to minimize repeat pairings
     while (nonLocals.length) {
-      groups[gi % groupsCount].push(nonLocals.shift());
-      gi++;
+      const candidate = nonLocals.shift();
+      let bestIdx = 0;
+      let bestScore = Infinity;
+      for (let i = 0; i < groups.length; i++) {
+        const s = scoreCandidate(groups[i], candidate);
+        if (s < bestScore) { bestScore = s; bestIdx = i; }
+      }
+      groups[bestIdx].push(candidate);
     }
 
     // Optional re-balance if some groups are much larger than others
@@ -224,6 +253,42 @@
     });
 
     setHint(`Created ${groups.length} group${groups.length === 1 ? '' : 's'}.`);
+    saveBtn.disabled = groups.length === 0;
+    // store last generated groups in memory for saving
+    lastGenerated = groups.map(g => g.map(p => p.name));
+  }
+
+  function pair(a, b) { return a < b ? a + '::' + b : b + '::' + a; }
+
+  function buildPenaltyMap() {
+    const map = new Map();
+    for (const session of state.history) {
+      for (const group of session) {
+        for (let i = 0; i < group.length; i++) {
+          for (let j = i + 1; j < group.length; j++) {
+            const key = pair(group[i], group[j]);
+            map.set(key, (map.get(key) || 0) + 1);
+          }
+        }
+      }
+    }
+    return map;
+  }
+
+  let lastGenerated = [];
+
+  function saveCurrentGroups() {
+    if (!lastGenerated || !lastGenerated.length) return;
+    // Only include names that are still in participants
+    const allowed = new Set(state.participants.map(p => p.name));
+    const cleaned = lastGenerated
+      .map(g => g.filter(n => allowed.has(n)))
+      .filter(g => g.length >= 2);
+    if (!cleaned.length) { setHint('Nothing to save.'); return; }
+    state.history.push(cleaned);
+    save();
+    setHint('Saved this lunch. Future rolls will avoid repeat pairs.');
+    saveBtn.disabled = true;
   }
 
   // Wire up events
@@ -237,10 +302,12 @@
   groupSizeInput.addEventListener('change', (e) => setGroupSize(e.target.value));
   rollBtn.addEventListener('click', roll);
   clearBtn.addEventListener('click', clearAll);
+  saveBtn.addEventListener('click', saveCurrentGroups);
 
   // Init
   load();
   groupSizeInput.value = String(state.groupSize);
   renderParticipants();
   if (state.participants.length) setHint(`${state.participants.length} participant${state.participants.length === 1 ? '' : 's'}.`);
+  saveBtn.disabled = true;
 })();
