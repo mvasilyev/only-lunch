@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Only Lunch — Random Lunch Groups</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <h1>Only Lunch</h1>
+      <p class="subtitle">Randomly split participants into lunch groups</p>
+    </header>
+
+    <section class="panel">
+      <h2>Participants</h2>
+      <form id="add-form" class="row">
+        <input id="name-input" type="text" placeholder="Add participant name" autocomplete="off" required />
+        <button type="submit" class="btn primary">Add</button>
+      </form>
+      <div class="list" id="participants-list" aria-live="polite"></div>
+
+      <div class="row small-gap controls">
+        <label for="group-size" class="label">Group size</label>
+        <input id="group-size" type="number" min="2" step="1" value="2" />
+        <button id="roll-btn" class="btn accent">Roll!</button>
+        <button id="clear-btn" class="btn" title="Remove all participants">Clear all</button>
+      </div>
+      <p class="hint" id="hint"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Groups</h2>
+      <div id="results" class="results" aria-live="polite"></div>
+    </section>
+
+    <footer class="footer">
+      <small>Tip: Press Enter to add. Drag-select and copy groups to share.</small>
+    </footer>
+  </main>
+
+  <script src="./script.js"></script>
+</body>
+</html>
