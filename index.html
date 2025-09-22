@@ -17,6 +17,10 @@
       <h2>Participants</h2>
       <form id="add-form" class="row">
         <input id="name-input" type="text" placeholder="Add participant name" autocomplete="off" required />
+        <label class="row small-gap" style="align-items:center">
+          <input id="local-input" type="checkbox" />
+          <span class="label">Local</span>
+        </label>
         <button type="submit" class="btn primary">Add</button>
       </form>
       <div class="list" id="participants-list" aria-live="polite"></div>

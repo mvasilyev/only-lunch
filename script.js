@@ -1,6 +1,7 @@
 (function () {
   const addForm = document.getElementById('add-form');
   const nameInput = document.getElementById('name-input');
+  const localInput = document.getElementById('local-input');
   const list = document.getElementById('participants-list');
   const groupSizeInput = document.getElementById('group-size');
   const rollBtn = document.getElementById('roll-btn');
@@ -10,7 +11,7 @@
 
   const STORAGE_KEY = 'only-lunch:v1';
   let state = {
-    participants: [],
+    participants: [], // [{ name: string, local: boolean }]
     groupSize: 2,
   };
 
@@ -22,7 +23,13 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.participants)) state.participants = parsed.participants;
+      if (Array.isArray(parsed.participants)) {
+        // migrate from ["Name"] to [{name, local:false}]
+        state.participants = parsed.participants.map(p => {
+          if (typeof p === 'string') return { name: p, local: false };
+          return { name: String(p.name || '').trim(), local: !!p.local };
+        }).filter(p => p.name);
+      }
       if (typeof parsed.groupSize === 'number' && parsed.groupSize > 1) state.groupSize = parsed.groupSize;
     } catch (_) {}
   }
@@ -33,16 +40,20 @@
       list.innerHTML = '<div class="hint">No participants yet. Add some above.</div>';
       return;
     }
-    for (const name of state.participants) {
+    for (const person of state.participants) {
       const el = document.createElement('div');
       el.className = 'chip';
-      el.innerHTML = `<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
+      const nameHtml = `<span class=\"name\" title=\"${escapeHtml(person.name)}\">${escapeHtml(person.name)}</span>`;
+      const badges = `<span class=\"badges\">${person.local ? '<span class=\"badge local\">Local</span>' : ''}</span>`;
+      el.innerHTML = nameHtml + badges;
       const rm = document.createElement('button');
       rm.className = 'remove';
       rm.type = 'button';
-      rm.setAttribute('aria-label', `Remove ${name}`);
+      rm.setAttribute('aria-label', `Remove ${person.name}`);
       rm.textContent = '✕';
-      rm.addEventListener('click', () => removeParticipant(name));
+      rm.addEventListener('click', () => removeParticipant(person.name));
+      // Toggle local on name click
+      el.querySelector('.name').addEventListener('click', () => toggleLocal(person.name));
       el.appendChild(rm);
       list.appendChild(el);
     }
@@ -57,25 +68,33 @@
       .replaceAll("'", '&#039;');
   }
 
-  function addParticipant(nameRaw) {
+  function addParticipant(nameRaw, isLocal) {
     const name = String(nameRaw || '').trim();
     if (!name) return;
     // de-duplicate (case-insensitive), keep first casing
-    const exists = state.participants.some(p => p.toLowerCase() === name.toLowerCase());
+    const exists = state.participants.some(p => p.name.toLowerCase() === name.toLowerCase());
     if (exists) {
       setHint(`"${name}" already added.`);
       return;
     }
-    state.participants.push(name);
-    state.participants.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    state.participants.push({ name, local: !!isLocal });
+    state.participants.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     setHint(`${state.participants.length} participant${state.participants.length === 1 ? '' : 's'}.`);
     save();
     renderParticipants();
   }
 
   function removeParticipant(name) {
-    state.participants = state.participants.filter(p => p !== name);
+    state.participants = state.participants.filter(p => p.name !== name);
     setHint(`${state.participants.length} participant${state.participants.length === 1 ? '' : 's'}.`);
+    save();
+    renderParticipants();
+  }
+
+  function toggleLocal(name) {
+    const p = state.participants.find(p => p.name === name);
+    if (!p) return;
+    p.local = !p.local;
     save();
     renderParticipants();
   }
@@ -133,31 +152,70 @@
     // Shuffle and form groups of equal size as much as possible.
     // If leftover remains, distribute one by one to existing groups to balance sizes.
     const shuffled = shuffle(state.participants);
-    const baseGroups = chunkBySize(shuffled, state.groupSize);
+    const locals = shuffled.filter(p => p.local);
+    const nonLocals = shuffled.filter(p => !p.local);
 
-    if (baseGroups.length > 1) {
-      // Balance: move extras from the last (possibly short) group into earlier ones
-      const last = baseGroups[baseGroups.length - 1];
-      if (last.length > 0 && last.length < state.groupSize) {
-        let idx = 0;
-        while (last.length) {
-          baseGroups[idx % (baseGroups.length - 1)].push(last.shift());
-          idx++;
+    // Determine number of groups: we need at least one local per group
+    const desiredGroups = Math.ceil(state.participants.length / state.groupSize);
+    const groupsCount = Math.max(1, Math.min(desiredGroups, locals.length || 1));
+
+    // Seed groups with one local each (or as many as we can)
+    const groups = Array.from({ length: groupsCount }, () => []);
+    for (let i = 0; i < groupsCount && locals.length; i++) {
+      const person = locals.shift();
+      groups[i].push(person);
+    }
+
+    // If locals left, distribute round-robin
+    let gi = 0;
+    while (locals.length) {
+      groups[gi % groupsCount].push(locals.shift());
+      gi++;
+    }
+
+    // Distribute non-locals to fill up to groupSize as evenly as possible
+    gi = 0;
+    while (nonLocals.length) {
+      groups[gi % groupsCount].push(nonLocals.shift());
+      gi++;
+    }
+
+    // Optional re-balance if some groups are much larger than others
+    // Keep simple: sort by size and move one from largest to smallest while diff > 1 and moving doesn't break local-per-group
+    function hasLocal(arr) { return arr.some(p => p.local); }
+    let guard = 100; // prevent infinite loops
+    while (guard-- > 0) {
+      groups.sort((a, b) => b.length - a.length);
+      const max = groups[0].length;
+      const min = groups[groups.length - 1].length;
+      if (max - min <= 1) break;
+      // find a movable person from largest group (prefer non-local)
+      const from = groups[0];
+      let idx = from.findIndex(p => !p.local);
+      if (idx === -1) {
+        // only move a local if the group keeps at least one local
+        idx = from.findIndex(p => p.local);
+        if (idx === -1) break;
+        const leavingLocal = from[idx];
+        if (from.filter(p => p.local).length <= 1) { // can't move last local
+          break;
         }
-        baseGroups.pop(); // remove now-empty last group
       }
+      const person = from.splice(idx, 1)[0];
+      // move to smallest group
+      groups[groups.length - 1].push(person);
     }
 
     // Render
-    baseGroups.forEach((group, i) => {
+    groups.forEach((group, i) => {
       const card = document.createElement('div');
       card.className = 'group';
       const title = document.createElement('h3');
       title.textContent = `Group ${i + 1} (${group.length})`;
       const list = document.createElement('ol');
-      for (const name of group) {
+      for (const person of group) {
         const li = document.createElement('li');
-        li.textContent = name;
+        li.textContent = person.name + (person.local ? ' · Local' : '');
         list.appendChild(li);
       }
       card.appendChild(title);
@@ -165,14 +223,15 @@
       results.appendChild(card);
     });
 
-    setHint(`Created ${baseGroups.length} group${baseGroups.length === 1 ? '' : 's'}.`);
+    setHint(`Created ${groups.length} group${groups.length === 1 ? '' : 's'}.`);
   }
 
   // Wire up events
   addForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    addParticipant(nameInput.value);
+    addParticipant(nameInput.value, localInput.checked);
     nameInput.value = '';
+    localInput.checked = false;
     nameInput.focus();
   });
   groupSizeInput.addEventListener('change', (e) => setGroupSize(e.target.value));

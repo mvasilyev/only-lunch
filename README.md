@@ -5,7 +5,8 @@ A tiny static web app to create random lunch groups from a list of participants.
 ## Features
 - Add/remove participants
 - Choose group size (>= 2)
-- Roll to create randomized, balanced groups
+- Mark participants as Local
+- Roll to create randomized, balanced groups ensuring each group has at least one Local (when possible)
 - Persists participants and group size in your browser (localStorage)
 
 ## Quick start
@@ -27,5 +28,7 @@ Helpful if your browser restricts localStorage for `file://` or for mobile testi
 
 ## Notes
 - Duplicates are prevented case-insensitively.
+- Groups are constrained to include at least one Local each. The number of groups is limited by the count of Locals.
+- If Locals are fewer than desired groups by size, fewer (larger) groups will be created.
 - If the final group would be smaller than the chosen size, members are distributed across earlier groups to balance sizes.
 - No backend; everything is in the browser.
